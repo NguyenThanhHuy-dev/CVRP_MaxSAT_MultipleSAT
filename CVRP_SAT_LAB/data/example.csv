@@ -1,0 +1,4 @@
+# Example CSV placeholder: id,x,y,demand
+0,0.0,0.0,0
+1,10.0,0.0,1
+2,10.0,10.0,2

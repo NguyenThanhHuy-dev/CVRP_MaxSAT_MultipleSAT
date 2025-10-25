@@ -1,0 +1,13 @@
+name: cvrp-sat-lab
+channels:
+  - defaults
+dependencies:
+  - python=3.10
+  - pip
+  - pip:
+    - numpy
+    - pandas
+    - networkx
+    - matplotlib
+    - tqdm
+    - pytest
