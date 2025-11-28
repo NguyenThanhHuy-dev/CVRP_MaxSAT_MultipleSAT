@@ -1,1 +1,31 @@
-Miniconda3-latest-Linux-x86_64.sh
+# Python artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.conda/
+
+# IDE settings
+.vscode/
+.idea/
+
+# Solver binaries (Không push file thực thi)
+solvers/open-wbo_bin
+solvers/open-wbo/open-wbo_release
+solvers/open-wbo/**/*.o
+solvers/open-wbo/**/*.a
+
+# Temporary Solver files (Rất quan trọng, tránh rác repo)
+*.wcnf
+*.cnf
+temp.wcnf
+iter_*.wcnf
+
+# System
+.DS_Store
+
+# (Tùy chọn) Results - Nếu bạn muốn lưu kết quả thì bỏ dòng dưới
+# results/

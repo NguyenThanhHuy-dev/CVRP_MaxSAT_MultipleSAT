@@ -26,7 +26,7 @@ def encode_routes_as_wcnf(routes: List[List[int]], D: np.ndarray) -> Tuple[WCNF,
         route_vars[r_idx] = r_idx
         # soft clause: selecting route costs 'cost'
         # we store integer costs as int (round)
-        wcnf.append([r_idx], weight=int(round(cost)))
+        wcnf.append([-r_idx], weight=int(round(cost)))
 
     # At-least-one coverage constraint per customer (customers 1..n)
     n = max(max(r) for r in routes)

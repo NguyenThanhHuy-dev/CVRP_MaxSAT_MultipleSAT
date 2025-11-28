@@ -15,9 +15,23 @@ def call_openwbo(wcnf_path: str, timeout: int = 60) -> str:
     
     # Kiểm tra xem file có tồn tại không để debug dễ hơn
     if not os.path.isfile(OPENWBO_EXEC):
-        return f"ERROR: Solver not found at {OPENWBO_EXEC}"
+        return f"ERROR: Solver binary not found at {OPENWBO_EXEC}"
 
     cmd = [OPENWBO_EXEC, wcnf_path]
+    
+    # --- PHẦN BỊ THIẾU TRONG CODE CỦA BẠN ---
+    try:
+        # Gọi lệnh hệ thống để chạy solver
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        
+        # Trả về kết quả (cả stdout và stderr)
+        return proc.stdout + '\n' + proc.stderr
+        
+    except subprocess.TimeoutExpired:
+        return 'TIMEOUT'
+    except Exception as e:
+        return f"ERROR: Execution failed - {e}"
+
 
 def call_clasp(cnf_path: str, timeout: int = 60) -> str:
     CLASP = os.environ.get('CLASP_PATH', 'clasp')
