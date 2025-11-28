@@ -7,14 +7,17 @@ import os
 
 
 def call_openwbo(wcnf_path: str, timeout: int = 60) -> str:
-    OPENWBO = os.environ.get('OPENWBO_PATH', 'open-wbo')
-    cmd = [OPENWBO, wcnf_path]
-    try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-        return proc.stdout + '\n' + proc.stderr
-    except subprocess.TimeoutExpired:
-        return 'TIMEOUT'
+    # Lấy đường dẫn tuyệt đối của thư mục chứa file này (src)
+    BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    
+    # Trỏ đến file open-wbo_bin nằm trong folder solvers
+    OPENWBO_EXEC = os.path.join(BASE_DIR, 'solvers', 'open-wbo_bin')
+    
+    # Kiểm tra xem file có tồn tại không để debug dễ hơn
+    if not os.path.isfile(OPENWBO_EXEC):
+        return f"ERROR: Solver not found at {OPENWBO_EXEC}"
 
+    cmd = [OPENWBO_EXEC, wcnf_path]
 
 def call_clasp(cnf_path: str, timeout: int = 60) -> str:
     CLASP = os.environ.get('CLASP_PATH', 'clasp')
