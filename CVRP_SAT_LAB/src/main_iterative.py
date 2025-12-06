@@ -2,19 +2,16 @@
 main_iterative.py
 =================
 Triển khai phương pháp MaxSAT-based Column Generation (Method 2).
-Vòng lặp:
-1. Khởi tạo Pool tuyến đường (Clarke-Wright).
-2. Lặp:
-   a. Giải MaxSAT (Master Problem) để chọn bộ tuyến tốt nhất hiện tại.
-   b. Phân tích nghiệm, tìm cơ hội cải tiến.
-   c. Sinh tuyến mới (Pricing/Mutation) thêm vào Pool.
-   d. Nếu không cải thiện được nữa -> Dừng.
+Tích hợp:
+- Ghi log Benchmark CSV.
+- Post-processing để loại bỏ khách trùng lặp (Fix lỗi Set Covering).
 """
 
 import os
 import time
 import random
 import sys
+import csv
 import numpy as np
 import matplotlib.pyplot as plt
 from typing import List
@@ -27,269 +24,289 @@ from solver_service import call_openwbo
 from decoder import parse_openwbo_model, chosen_routes_from_vars
 
 # --- CẤU HÌNH ---
-TIMEOUT_SOLVER = 30   # Giây cho mỗi lần gọi solver
-MAX_ITERATIONS = 20   # Số vòng lặp sinh cột tối đa (Tăng lên để tìm kiếm sâu hơn)
-MAX_POOL_SIZE = 2000  # Giới hạn kích thước bể chứa tuyến đường
+TIMEOUT_SOLVER = 60   # Giây cho mỗi lần gọi solver
+MAX_ITERATIONS = 50   # Số vòng lặp sinh cột tối đa
+MAX_POOL_SIZE = 5000  # Giới hạn kích thước bể chứa tuyến đường
 
 
 def generate_new_routes_mutation(current_best_routes: List[List[int]], 
                                  dist_matrix: np.ndarray, 
                                  demands: List[int], 
                                  capacity: int) -> List[List[int]]:
-    """
-    Sinh cột mới bằng cách 'đột biến' các tuyến đường tốt nhất hiện tại.
-    Chiến lược: Lấy 2 tuyến, thử tráo đổi khách hàng (Swap) hoặc gộp.
-    """
+    """Sinh cột mới: 2-opt và Crossover."""
     new_candidates = []
     
-    # Chiến lược 1: Thử chạy 2-opt kỹ hơn (nếu chưa tối ưu)
+    # 1. 2-opt improvement
     for r in current_best_routes:
         improved = two_opt(r, dist_matrix, max_iter=500)
-        # Chỉ thêm nếu thực sự cải thiện đáng kể để tránh trùng lặp
         if route_cost(improved, dist_matrix) < route_cost(r, dist_matrix) - 1e-5:
             new_candidates.append(improved)
 
-    # Chiến lược 2: Destroy & Repair đơn giản (Lai ghép 2 tuyến)
-    # Lấy ngẫu nhiên các cặp tuyến để lai ghép
+    # 2. Crossover
     n_routes = len(current_best_routes)
     if n_routes >= 2:
-        # Số lần thử lai ghép tùy thuộc vào số lượng tuyến đang có
         num_trials = min(10, n_routes * 2)
-        
         for _ in range(num_trials):
             idx1, idx2 = np.random.choice(n_routes, 2, replace=False)
             r1, r2 = current_best_routes[idx1], current_best_routes[idx2]
             
-            # Cắt đôi tuyến r1 và r2 tại điểm ngẫu nhiên (trừ điểm đầu/cuối là depot)
             if len(r1) > 3 and len(r2) > 3:
                 cut1 = random.randint(1, len(r1) - 2)
                 cut2 = random.randint(1, len(r2) - 2)
                 
-                # Tạo tuyến con mới: Đầu r1 + Đuôi r2
                 child1 = r1[:cut1] + r2[cut2:]
-                # Đầu r2 + Đuôi r1
                 child2 = r2[:cut2] + r1[cut1:]
                 
-                # Hàm check tải trọng nội bộ
                 def is_valid(route):
-                    # Route phải có ít nhất 1 khách (len > 2 vì có 2 depot)
                     if len(route) <= 2: return False
-                    # Phải bắt đầu và kết thúc bằng 0
                     if route[0] != 0 or route[-1] != 0: return False
-                    
-                    load = sum(demands[n] for n in route)
-                    return load <= capacity
+                    return sum(demands[n] for n in route) <= capacity
 
-                # Đảm bảo format đúng (kết thúc bằng 0)
                 if child1[-1] != 0: child1.append(0)
                 if child2[-1] != 0: child2.append(0)
 
-                # Nếu hợp lệ thì tối ưu hóa ngay bằng 2-opt trước khi thêm
                 if is_valid(child1): new_candidates.append(two_opt(child1, dist_matrix))
                 if is_valid(child2): new_candidates.append(two_opt(child2, dist_matrix))
 
     return new_candidates
 
 
+def generate_merge_mutation(current_routes: List[List[int]], 
+                            dist_matrix: np.ndarray, 
+                            demands: List[int], 
+                            capacity: int) -> List[List[int]]:
+    """Gộp tuyến để giảm số lượng xe."""
+    candidates = []
+    sorted_indices = np.argsort([len(r) for r in current_routes])
+    
+    for idx_src in sorted_indices:
+        src_route = current_routes[idx_src]
+        if len(src_route) > 6: continue
+        
+        customers_to_move = [c for c in src_route if c != 0]
+        
+        for idx_dest, dest_route in enumerate(current_routes):
+            if idx_src == idx_dest: continue 
+            
+            new_route = list(dest_route)
+            possible = True
+            
+            for cust in customers_to_move:
+                # --- QUAN TRỌNG: Tránh thêm khách đã có ---
+                if cust in new_route: continue 
+                # ------------------------------------------
+
+                best_pos = -1
+                best_increase = float('inf')
+                
+                for i in range(1, len(new_route)):
+                    increase = (dist_matrix[new_route[i-1], cust] + 
+                                dist_matrix[cust, new_route[i]] - 
+                                dist_matrix[new_route[i-1], new_route[i]])
+                    if increase < best_increase:
+                        best_increase = increase
+                        best_pos = i
+                
+                if best_pos != -1:
+                    new_route.insert(best_pos, cust)
+                else:
+                    possible = False
+                    break
+            
+            if possible and sum(demands[c] for c in new_route) <= capacity:
+                optimized_new_route = two_opt(new_route, dist_matrix)
+                candidates.append(optimized_new_route)
+
+    return candidates
+
+
+def clean_solution(routes: List[List[int]], dist_matrix: np.ndarray) -> List[List[int]]:
+    """
+    Hậu xử lý: Loại bỏ các khách hàng bị trùng lặp (do mô hình Set Covering).
+    Giữ lại lần xuất hiện đầu tiên, xóa các lần sau.
+    """
+    served = set()
+    cleaned_routes = []
+    
+    for r in routes:
+        new_r = [0]
+        for node in r[1:-1]:
+            if node not in served:
+                served.add(node)
+                new_r.append(node)
+        new_r.append(0)
+        
+        if len(new_r) > 2:
+            cleaned_routes.append(new_r)
+    
+    # Optional: Chạy 2-opt lại cho các tuyến vừa bị xóa bớt điểm để tối ưu lại
+    final_routes = [two_opt(r, dist_matrix) for r in cleaned_routes]
+    return final_routes
+
+
 def plot_solution(instance: Instance, routes: List[List[int]], cost: float):
-    """
-    Vẽ biểu đồ kết quả và lưu vào file ảnh.
-    """
     plt.figure(figsize=(10, 8))
     
-    # 1. Vẽ Depot
-    if instance.coords:
+    # Vẽ Depot
+    depot_x, depot_y = (0, 0)
+    if instance.coords and len(instance.coords) > 0:
         depot_x, depot_y = instance.coords[instance.depot]
-        plt.scatter(depot_x, depot_y, c='red', marker='s', s=150, zorder=10, label='Depot')
         
-        # 2. Vẽ Khách hàng
-        coords = instance.coords
-        # Khách hàng từ index 1 trở đi
-        xs = [c[0] for c in coords[1:]]
-        ys = [c[1] for c in coords[1:]]
+    plt.scatter(depot_x, depot_y, c='red', marker='s', s=150, zorder=10, label='Depot')
+    
+    # Vẽ Khách (Nếu tọa độ thật, nếu là Explicit Matrix thì tất cả là 0,0 sẽ chồng lên nhau)
+    if instance.coords:
+        xs = [c[0] for c in instance.coords[1:]]
+        ys = [c[1] for c in instance.coords[1:]]
         plt.scatter(xs, ys, c='blue', s=40, zorder=5)
-        
-        # Đánh số thứ tự khách hàng
         for i in range(1, instance.n):
-            plt.text(coords[i][0], coords[i][1] + 0.5, str(i), fontsize=9, ha='center')
-            
-        # 3. Vẽ Tuyến đường
-        # Dùng colormap để mỗi tuyến 1 màu
-        cmap = plt.get_cmap('tab20')
-        
-        for idx, r in enumerate(routes):
-            route_coords = [coords[node] for node in r]
-            r_xs, r_ys = zip(*route_coords)
-            
-            # Vẽ đường nối
-            plt.plot(r_xs, r_ys, marker='.', linestyle='-', linewidth=2, 
-                     color=cmap(idx % 20), label=f'Route {idx+1}', alpha=0.7)
-            
-            # Vẽ mũi tên chỉ hướng (tùy chọn, vẽ ở giữa tuyến)
-            mid = len(r) // 2
-            if mid < len(r) - 1:
-                p1 = coords[r[mid]]
-                p2 = coords[r[mid+1]]
-                plt.arrow(p1[0], p1[1], (p2[0]-p1[0])*0.5, (p2[1]-p1[1])*0.5, 
-                          head_width=0.5, color=cmap(idx % 20))
+            if i < len(instance.coords):
+                plt.text(instance.coords[i][0], instance.coords[i][1], str(i), fontsize=9)
+
+    cmap = plt.get_cmap('tab20')
+    for idx, r in enumerate(routes):
+        route_coords = []
+        for node in r:
+            if node < len(instance.coords):
+                route_coords.append(instance.coords[node])
+            else:
+                route_coords.append((0,0))
+                
+        r_xs, r_ys = zip(*route_coords)
+        plt.plot(r_xs, r_ys, marker='.', linestyle='-', linewidth=2, color=cmap(idx % 20), label=f'Route {idx+1}')
 
     plt.title(f"Solution for {instance.name}\nTotal Cost: {cost:.2f} | Vehicles: {len(routes)}")
-    plt.xlabel("X Coordinate")
-    plt.ylabel("Y Coordinate")
-    plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
-    plt.grid(True, linestyle='--', alpha=0.5)
+    plt.legend()
     plt.tight_layout()
     
-    # Lưu ảnh
-    # Tạo thư mục nếu chưa có
-    result_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'results', 'plots')
-    os.makedirs(result_dir, exist_ok=True)
-    
-    save_path = os.path.join(result_dir, f"{instance.name}_solution.png")
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    save_path = os.path.join(base_dir, 'results', 'plots', f"{instance.name}_solution.png")
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
     plt.savefig(save_path)
-    print(f"\n📊 Đã lưu biểu đồ trực quan tại: {save_path}")
-    plt.close() # Đóng figure để giải phóng bộ nhớ
+    plt.close()
 
 
 def run_column_generation(instance: Instance):
-    print(f"\n🚀 BẮT ĐẦU GIẢI: {instance.name} (n={instance.n-1}, Q={instance.capacity})")
+    start_time = time.time()
+    print(f"\n🚀 BẮT ĐẦU GIẢI: {instance.name} (n={instance.n-1}, Q={instance.capacity}, BKS={instance.bks})")
     
-    # 1. KHỞI TẠO (Initialization)
-    # Dùng heuristic để tạo tập cột ban đầu
+    # 1. Init
     initial_routes = clarke_wright_savings(instance.dist_matrix, instance.demands, instance.capacity)
     initial_routes = [two_opt(r, instance.dist_matrix) for r in initial_routes]
+    initial_cost = total_distance(initial_routes, instance.dist_matrix)
+    print(f"   [Init] Initial Heuristic Cost: {initial_cost:.2f}")
     
-    # Pool chứa tất cả các tuyến đường duy nhất đã tìm thấy (chuyển sang tuple để hash)
-    # Key: Tuple tuyến đường, Value: Cost
     route_pool = {tuple(r): route_cost(r, instance.dist_matrix) for r in initial_routes}
-    
     best_overall_cost = float('inf')
     best_solution_routes = []
+    final_iterations = 0
 
-    print(f"   [Init] Pool size: {len(route_pool)}")
-
-    # 2. VÒNG LẶP (Iteration Loop)
+    # 2. Loop
     for it in range(1, MAX_ITERATIONS + 1):
+        final_iterations = it
         print(f"\n🔄 ITERATION {it}/{MAX_ITERATIONS}")
         
-        # Chuyển pool thành list để encode
         pool_list = [list(r) for r in route_pool.keys()]
         
-        # a. Encode sang MaxSAT (Master Problem)
+        # Encode & Solve
         wcnf, route_map = encode_routes_as_wcnf(pool_list, instance.dist_matrix)
-        wcnf_filename = f"iter_{it}.wcnf"
-        wcnf_path = os.path.join(os.getcwd(), wcnf_filename)
+        wcnf_path = f"iter_{it}.wcnf"
         write_wcnf_to_file(wcnf, wcnf_path)
         
-        # b. Gọi Solver
         out = call_openwbo(wcnf_path, timeout=TIMEOUT_SOLVER)
+        if os.path.exists(wcnf_path): os.remove(wcnf_path) # Clean up immediately
         
-        # c. Giải mã kết quả
         vars_true = parse_openwbo_model(out)
         chosen_indices = chosen_routes_from_vars(vars_true, route_map)
         
         if not chosen_indices:
-            print("   ⚠️ Solver không tìm thấy nghiệm (hoặc timeout).")
-            # Nếu timeout, có thể do bài toán quá lớn, ta giữ lại kết quả tốt nhất trước đó
+            print("   ⚠️ Solver fail.")
             break
             
-        current_solution = [pool_list[i-1] for i in chosen_indices]
+        raw_solution = [pool_list[i-1] for i in chosen_indices]
+        
+        # --- CLEAN DUPLICATES ---
+        current_solution = clean_solution(raw_solution, instance.dist_matrix)
+        # ------------------------
+        
         current_cost = total_distance(current_solution, instance.dist_matrix)
+        print(f"   🔹 Cost (Valid): {current_cost:.2f}")
         
-        print(f"   🔹 Cost vòng này: {current_cost:.2f}")
-        
-        # Cập nhật kết quả tốt nhất (Best so far)
-        # Lưu ý: Do MaxSAT tính xấp xỉ số nguyên nên ta cho phép sai số nhỏ float
         if current_cost < best_overall_cost - 1e-4:
-            print(f"   ✅ TÌM THẤY KẾT QUẢ TỐT HƠN! ({best_overall_cost:.2f} -> {current_cost:.2f})")
+            print(f"   ✅ KẾT QUẢ TỐT HƠN! ({best_overall_cost:.2f} -> {current_cost:.2f})")
             best_overall_cost = current_cost
             best_solution_routes = current_solution
         else:
-            print("   Creating new columns (routes) to improve...")
+            print("   Creating new columns...")
 
-        # d. Sinh cột mới (Column Generation / Pricing)
-        new_routes = generate_new_routes_mutation(current_solution, 
-                                                  instance.dist_matrix, 
-                                                  instance.demands, 
-                                                  instance.capacity)
+        # Mutation
+        # Lưu ý: Dùng raw_solution (chưa clean) để lai ghép có thể tạo đa dạng tốt hơn
+        # nhưng dùng current_solution (đã clean) sẽ an toàn hơn. Ta dùng current_solution.
+        new_routes = generate_new_routes_mutation(current_solution, instance.dist_matrix, instance.demands, instance.capacity)
+        merge_routes = generate_merge_mutation(current_solution, instance.dist_matrix, instance.demands, instance.capacity)
+        new_routes.extend(merge_routes)
         
-        # Thêm vào Pool
-        added_count = 0
+        added = 0
         for nr in new_routes:
             t_nr = tuple(nr)
             if t_nr not in route_pool:
-                # Kiểm tra giới hạn Pool để tránh tràn RAM
                 if len(route_pool) < MAX_POOL_SIZE:
                     route_pool[t_nr] = route_cost(nr, instance.dist_matrix)
-                    added_count += 1
+                    added += 1
+        print(f"   ✚ Added {added} routes.")
         
-        print(f"   ✚ Đã thêm {added_count} tuyến đường mới vào Pool.")
-        
-        # Dọn dẹp file tạm
-        if os.path.exists(wcnf_path):
-            os.remove(wcnf_path)
-            
-        # Điều kiện dừng sớm: Nếu không sinh được gì mới
-        if added_count == 0:
-            print("   🛑 Không sinh thêm được tuyến mới nào. Dừng thuật toán.")
+        if added == 0:
+            print("   🛑 Stagnation.")
             break
 
-    # 3. KẾT THÚC
+    # 3. Finalize
+    end_time = time.time()
+    total_time = end_time - start_time
+    
     print("\n" + "="*50)
     print(f"🏆 KẾT QUẢ CUỐI CÙNG ({instance.name})")
-    print(f"   Tổng chi phí: {best_overall_cost:.4f}")
-    print("   Các tuyến đường:")
     for i, r in enumerate(best_solution_routes, 1):
         c = route_cost(r, instance.dist_matrix)
         load = sum(instance.demands[n] for n in r)
-        print(f"     Route {i}: {r} (Cost: {c:.2f}, Load: {load}/{instance.capacity})")
+        print(f"   Route {i}: {r} (Cost: {c:.2f}, Load: {load}/{instance.capacity})")
+    
+    # Metrics
+    imp_percent = 0.0
+    if initial_cost > 0: imp_percent = ((initial_cost - best_overall_cost)/initial_cost)*100
+    
+    gap_percent = 0.0
+    if instance.bks > 0: gap_percent = ((best_overall_cost - instance.bks)/instance.bks)*100
+    else: gap_percent = -1.0
+
+    print("-" * 50)
+    print(f"📊 BENCHMARK METRICS:")
+    print(f"   BKS: {instance.bks} | Final: {best_overall_cost:.2f}")
+    print(f"   Improvement: {imp_percent:.2f}%")
+    print(f"   Gap: {gap_percent:.2f}%")
+    print(f"   Time: {total_time:.2f}s")
     print("="*50)
 
-    # 4. VẼ BIỂU ĐỒ
-    try:
-        plot_solution(instance, best_solution_routes, best_overall_cost)
-    except Exception as e:
-        print(f"⚠️ Không thể vẽ biểu đồ: {e}")
-
+    # CSV Log
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    csv_file = os.path.join(base_dir, "results", "benchmark_log.csv")
+    os.makedirs(os.path.dirname(csv_file), exist_ok=True)
+    
+    with open(csv_file, mode='a', newline='') as f:
+        writer = csv.writer(f)
+        if not os.path.isfile(csv_file):
+            writer.writerow(["Instance", "n", "k", "Q", "BKS", "Init", "Final", "Imp%", "Gap%", "Time", "Iter", "Pool"])
+        writer.writerow([instance.name, instance.n - 1, len(best_solution_routes), instance.capacity, instance.bks,
+                         f"{initial_cost:.2f}", f"{best_overall_cost:.2f}", f"{imp_percent:.2f}", f"{gap_percent:.2f}",
+                         f"{total_time:.2f}", final_iterations, len(route_pool)])
+    
+    try: plot_solution(instance, best_solution_routes, best_overall_cost)
+    except: pass
 
 if __name__ == "__main__":
-    # HỖ TRỢ CHẠY TỪ DÒNG LỆNH
-    # Cách dùng: python main_iterative.py ../data/A/A-n32-k5.vrp
-    
     if len(sys.argv) > 1:
         vrp_file = sys.argv[1]
-        if not os.path.exists(vrp_file):
-            print(f"❌ File không tồn tại: {vrp_file}")
-            sys.exit(1)
-            
-        print(f"📂 Đang đọc file: {vrp_file}")
-        try:
-            # Đọc instance từ file .vrp
-            instance = read_vrplib(vrp_file)
-            run_column_generation(instance)
-        except Exception as e:
-            print(f"❌ Lỗi khi chạy thực nghiệm: {e}")
-            import traceback
-            traceback.print_exc()
-            
+        if os.path.exists(vrp_file):
+            run_column_generation(read_vrplib(vrp_file))
+        else: print("File not found.")
     else:
-        print("⚠️ Không có file input. Chạy chế độ DEMO với dữ liệu giả lập...")
-        print("💡 Gợi ý: python main_iterative.py <path_to_vrp_file>")
-        
-        # DỮ LIỆU DEMO
-        coords = [(0,0), (10,0), (0,10), (5,5), (2,8), (8,2), (10,10), (1,1), (9,9), (3,3), (7,7)]
-        demands = [0, 2, 3, 1, 5, 2, 4, 1, 3, 2, 4] 
-        capacity = 10 
-        
-        instance = Instance(
-            name="demo_iterative",
-            n=len(coords),
-            depot=0,
-            coords=coords,
-            demands=demands,
-            capacity=capacity,
-            dist_matrix=None 
-        )
-        instance.dist_matrix = compute_distance_matrix(coords)
-
-        run_column_generation(instance)
+        print("Usage: python main_iterative.py <file.vrp>")
