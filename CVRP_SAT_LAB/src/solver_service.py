@@ -2,9 +2,7 @@
 Wrapper to call external solvers (open-wbo, clasp) and parse output.
 """
 import subprocess
-from typing import Tuple
 import os
-
 
 def call_openwbo(wcnf_path: str, timeout: int = 60) -> str:
     # Lấy đường dẫn tuyệt đối của thư mục chứa file này (src)
@@ -17,17 +15,21 @@ def call_openwbo(wcnf_path: str, timeout: int = 60) -> str:
     if not os.path.isfile(OPENWBO_EXEC):
         return f"ERROR: Solver binary not found at {OPENWBO_EXEC}"
 
-    cmd = [OPENWBO_EXEC, wcnf_path]
+    # --- CẬP NHẬT: Thêm tham số -cpu-lim để Solver tự quản lý thời gian ---
+    # Solver sẽ cố gắng dừng lại và in kết quả tốt nhất khi hết giờ
+    cmd = [OPENWBO_EXEC, wcnf_path, f"-cpu-lim={timeout}"]
     
-    # --- PHẦN BỊ THIẾU TRONG CODE CỦA BẠN ---
     try:
-        # Gọi lệnh hệ thống để chạy solver
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        # Tăng timeout của Python lên một chút (ví dụ +5s) để Solver kịp in kết quả trước khi bị kill
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout + 5)
         
-        # Trả về kết quả (cả stdout và stderr)
-        return proc.stdout + '\n' + proc.stderr
+        # Trả về kết quả stdout (chứa dòng v ... và s ...)
+        # Không cần in stderr ra màn hình để tránh rác log, trừ khi cần debug sâu
+        return proc.stdout 
         
     except subprocess.TimeoutExpired:
+        # Chỉ khi Solver bị treo cứng quá lâu (quá timeout+5s) mới vào đây
+        print(f"   ⚠️ Python killed solver process (Hard Timeout after {timeout+5}s).")
         return 'TIMEOUT'
     except Exception as e:
         return f"ERROR: Execution failed - {e}"

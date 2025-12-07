@@ -1,11 +1,27 @@
 import csv
 import os
+import datetime
 
-def log_benchmark(instance, best_routes, initial_cost, final_cost, time_taken, iterations, pool_size):
+def log_benchmark(instance, best_routes, initial_cost, final_cost, time_taken, iterations, pool_size, method_name="HybridLNS"):
     """
-    Tính toán Gap, Improvement và ghi log vào file CSV chung.
+    Ghi log tổng hợp, lưu chi tiết nghiệm và file log text.
     """
-    # 1. Tính Metrics
+    # --- 0. Chuẩn bị đường dẫn thư mục ---
+    # Giả sử file này nằm ở: root/src/utils/logger.py -> lên 3 cấp là root
+    base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    
+    results_dir = os.path.join(base_dir, "results")
+    benchmark_file = os.path.join(results_dir, "benchmark_log.csv")
+    
+    # Tạo các thư mục con nếu chưa có
+    csv_detail_dir = os.path.join(results_dir, "csv")
+    log_txt_dir = os.path.join(results_dir, "log")
+    
+    os.makedirs(results_dir, exist_ok=True)
+    os.makedirs(csv_detail_dir, exist_ok=True)
+    os.makedirs(log_txt_dir, exist_ok=True)
+
+    # --- 1. Tính toán Metrics ---
     imp_percent = 0.0
     if initial_cost > 0:
         imp_percent = ((initial_cost - final_cost) / initial_cost) * 100
@@ -16,39 +32,47 @@ def log_benchmark(instance, best_routes, initial_cost, final_cost, time_taken, i
     else:
         gap_percent = -1.0 # Không có BKS
 
-    # 2. In ra màn hình console
-    print("-" * 50)
-    print(f"📊 BENCHMARK METRICS ({instance.name}):")
-    print(f"   BKS (Optimal): {instance.bks}")
-    print(f"   Initial Cost:  {initial_cost:.2f}")
-    print(f"   Final Cost:    {final_cost:.2f}")
-    print(f"   Improvement:   {imp_percent:.2f}%")
-    print(f"   Gap to BKS:    {gap_percent:.2f}%")
-    print(f"   Time (s):      {time_taken:.2f}s")
-    print(f"   Iterations:    {iterations}")
-    print(f"   Pool Size:     {pool_size}")
-    print("=" * 50)
+    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    # 3. Ghi vào file CSV
-    # Đường dẫn: CVRP_SAT_LAB/results/benchmark_log.csv
-    base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    csv_file = os.path.join(base_dir, "results", "benchmark_log.csv")
-    os.makedirs(os.path.dirname(csv_file), exist_ok=True)
+    # --- 2. In ra màn hình console & Chuẩn bị nội dung log ---
+    log_content = []
+    log_content.append("=" * 50)
+    log_content.append(f"📊 BENCHMARK METRICS ({instance.name}) - {timestamp}")
+    log_content.append(f"   Method:        {method_name}")
+    log_content.append(f"   BKS (Optimal): {instance.bks}")
+    log_content.append(f"   Initial Cost:  {initial_cost:.2f}")
+    log_content.append(f"   Final Cost:    {final_cost:.2f}")
+    log_content.append(f"   Improvement:   {imp_percent:.2f}%")
+    log_content.append(f"   Gap to BKS:    {gap_percent:.2f}%")
+    log_content.append(f"   Time (s):      {time_taken:.2f}s")
+    log_content.append(f"   Iterations:    {iterations}")
+    log_content.append(f"   Pool Size:     {pool_size}")
+    log_content.append("-" * 50)
+    log_content.append("🛣️ DETAILED ROUTES:")
     
-    file_exists = os.path.isfile(csv_file)
-    
+    for i, route in enumerate(best_routes, 1):
+        load = sum(instance.demands[n] for n in route)
+        route_str = f"   Route {i} (Load {load}/{instance.capacity}): {route}"
+        log_content.append(route_str)
+    log_content.append("=" * 50)
+
+    # In ra màn hình
+    print("\n".join(log_content))
+
+    # --- 3. Ghi vào file CSV tổng hợp (results/benchmark_log.csv) ---
+    file_exists = os.path.isfile(benchmark_file)
     try:
-        with open(csv_file, mode='a', newline='') as f:
+        with open(benchmark_file, mode='a', newline='', encoding='utf-8') as f:
             writer = csv.writer(f)
-            # Ghi Header nếu file mới tạo
             if not file_exists:
-                writer.writerow(["Instance", "n", "k_vehicles", "Q", "BKS", 
+                writer.writerow(["Timestamp", "Instance", "Method", "n", "k_vehicles", "Q", "BKS", 
                                  "Init_Cost", "Final_Cost", "Improvement_%", "Gap_%", 
-                                 "Time_s", "Iterations", "Pool_Size", "Method"])
+                                 "Time_s", "Iterations"])
             
-            # Ghi Data Row
             writer.writerow([
+                timestamp,
                 instance.name, 
+                method_name,           # Đã sửa: dùng biến truyền vào
                 instance.n - 1, 
                 len(best_routes), 
                 instance.capacity, 
@@ -58,10 +82,34 @@ def log_benchmark(instance, best_routes, initial_cost, final_cost, time_taken, i
                 f"{imp_percent:.2f}", 
                 f"{gap_percent:.2f}", 
                 f"{time_taken:.2f}",
-                iterations,
-                pool_size,
-                "ColumnGeneration" # Đánh dấu phương pháp
+                iterations
             ])
-        print(f"📝 Đã ghi kết quả so sánh vào: {csv_file}")
+        print(f"📝 Đã ghi kết quả tổng hợp vào: {benchmark_file}")
     except Exception as e:
-        print(f"⚠️ Lỗi khi ghi log CSV: {e}")
+        print(f"⚠️ Lỗi ghi benchmark csv: {e}")
+
+    # --- 4. Ghi chi tiết nghiệm vào CSV riêng (results/csv/InstanceName_sol.csv) ---
+    # File này hữu ích để vẽ lại biểu đồ hoặc kiểm tra kỹ từng xe
+    detail_csv_path = os.path.join(csv_detail_dir, f"{instance.name}_solution.csv")
+    try:
+        with open(detail_csv_path, mode='w', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+            writer.writerow(["Route_ID", "Load", "Capacity", "Path_Sequence"])
+            for i, route in enumerate(best_routes, 1):
+                load = sum(instance.demands[n] for n in route)
+                # Chuyển list [0, 5, 2, 0] thành chuỗi "0-5-2-0"
+                path_str = "-".join(map(str, route))
+                writer.writerow([i, load, instance.capacity, path_str])
+        print(f"📝 Đã lưu chi tiết lộ trình vào: {detail_csv_path}")
+    except Exception as e:
+        print(f"⚠️ Lỗi ghi detail csv: {e}")
+
+    # --- 5. Ghi Log Text (results/log/InstanceName.log) ---
+    # File này lưu lại y hệt những gì đã in ra màn hình để xem lại sau
+    log_txt_path = os.path.join(log_txt_dir, f"{instance.name}.log")
+    try:
+        with open(log_txt_path, mode='w', encoding='utf-8') as f:
+            f.write("\n".join(log_content))
+        print(f"📝 Đã lưu log chạy vào: {log_txt_path}")
+    except Exception as e:
+        print(f"⚠️ Lỗi ghi log text: {e}")
