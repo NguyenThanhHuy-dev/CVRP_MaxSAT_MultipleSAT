@@ -1,5 +1,4 @@
-# Cấu hình chung cho toàn bộ dự án
-TIMEOUT_SOLVER = 60
+TIMEOUT_SOLVER = 1200
 TIMEOUT_LNS_INNER = 15
 
 MAX_ITERATIONS = 50

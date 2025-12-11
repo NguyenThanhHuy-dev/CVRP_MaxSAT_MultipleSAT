@@ -10,7 +10,7 @@ from strategies.exact_multishot import ExactMultiShotStrategy
 def main():
     parser = argparse.ArgumentParser(description="CVRP Solver using SAT")
     parser.add_argument("instance_path", type=str, help="Path to VRPLIB file")
-    # Thêm 'exact' vào choices
+
     parser.add_argument("--method", type=str, choices=["lns", "colgen", "exact"], default="lns") 
     args = parser.parse_args()
 
@@ -21,8 +21,6 @@ def main():
         solver.solve()
     elif args.method == "colgen":
         print("Running Column Generation (Placeholder)...")
-        # solver = ColumnGenerationStrategy(instance)
-        # solver.solve()
     elif args.method == "exact":  # <--- Logic mới
         solver = ExactMultiShotStrategy(instance)
         solver.solve()

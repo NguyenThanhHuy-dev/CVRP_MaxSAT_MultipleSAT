@@ -6,11 +6,12 @@ import numpy as np
 def encode_edges_as_wcnf(nodes: List[int], 
                          edges: List[Tuple[int, int]], 
                          dist_matrix: np.ndarray,
-                         subtour_cuts: List[List[Tuple[int, int]]] = None) -> Tuple[WCNF, Dict[Tuple[int, int], int]]:
+                         subtour_cuts: List[List[Tuple[int, int]]] = None,
+                         min_vehicles: int = 1) -> Tuple[WCNF, Dict[Tuple[int, int], int]]: # <--- MỚI: Default là 1
     
     wcnf = WCNF()
     edge_to_var = {}
-    var_to_edge = {}
+    var_to_edge = {} # (Nếu bạn cần dùng biến này để debug ngược lại)
     counter = 1
     
     # 1. Map Variables & Soft Clauses (Minimize Cost)
@@ -40,17 +41,16 @@ def encode_edges_as_wcnf(nodes: List[int],
 
         if i == 0:
             # --- FIX QUAN TRỌNG: Ràng buộc cho Depot ---
-            # Depot phải có ít nhất 1 cạnh ra và 1 cạnh vào.
-            # (Toán học đảm bảo: Tổng Out cả đồ thị = Tổng In, nên nếu các Node khác 1=1
-            # thì Depot tự động cân bằng Out=In, chỉ cần ép nó > 0 là đủ).
+            # Depot phải có ít nhất K xe đi ra và K xe đi vào.
+            # Thay vì bound=1 (ít nhất 1 xe), ta dùng bound=min_vehicles
             
-            # Out-degree >= 1
-            cnf_out = CardEnc.atleast(lits=out_edges[i], bound=1, top_id=top_var)
+            # Out-degree >= min_vehicles
+            cnf_out = CardEnc.atleast(lits=out_edges[i], bound=min_vehicles, top_id=top_var)
             wcnf.extend(cnf_out.clauses)
             top_var = cnf_out.nv
             
-            # In-degree >= 1
-            cnf_in = CardEnc.atleast(lits=in_edges[i], bound=1, top_id=top_var)
+            # In-degree >= min_vehicles
+            cnf_in = CardEnc.atleast(lits=in_edges[i], bound=min_vehicles, top_id=top_var)
             wcnf.extend(cnf_in.clauses)
             top_var = cnf_in.nv
         else:
@@ -69,7 +69,6 @@ def encode_edges_as_wcnf(nodes: List[int],
             clause = []
             for u, v in cut_edges:
                 if (u, v) in edge_to_var:
-                    # Logic: Không được chọn TẤT CẢ các cạnh trong subtour này cùng lúc
                     clause.append(-edge_to_var[(u, v)])
             if clause:
                 wcnf.append(clause)

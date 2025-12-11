@@ -1,14 +1,3 @@
-"""
-experiment.py
-==============
-Chạy toàn bộ pipeline CVRP-SAT đơn giản:
-1. Load dữ liệu (tạo ví dụ nhỏ)
-2. Sinh nghiệm bằng Clarke–Wright + 2-opt
-3. Mã hóa thành WCNF
-4. Gọi solver (Open-WBO)
-5. Giải mã nghiệm và tính chi phí cuối cùng
-"""
-
 import os
 import numpy as np
 
@@ -16,7 +5,7 @@ from data_loader import from_coords_and_demands
 from heuristic import clarke_wright_savings, two_opt, total_distance
 from encoder import encode_routes_as_wcnf, write_wcnf_to_file
 from solver_service import call_openwbo
-from decoder import parse_openwbo_model, chosen_routes_from_vars
+from utils.decoder import parse_openwbo_model, chosen_routes_from_vars
 
 
 def run_demo():

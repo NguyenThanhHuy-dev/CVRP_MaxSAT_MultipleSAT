@@ -14,10 +14,17 @@ from config import TIMEOUT_SOLVER # Dùng timeout dài hơn (60s - 300s)
 class ExactMultiShotStrategy:
     def __init__(self, instance: Instance):
         self.instance = instance
-        # Với phương pháp chính xác, ta nên dùng K lớn hoặc Full Graph
-        # Tuy nhiên để chạy nổi N=45, ta tạm dùng K=20 (chấp nhận rủi ro nhỏ)
-        # Nếu muốn Optimal 100% lý thuyết, phải dùng Full Graph (K = N)
-        self.k_nearest = 20  
+        self.k_nearest = 3
+        
+        # --- TÍNH K MIN (LOWER BOUND) ---
+        # Dựa trên lý thuyết Bin Packing Problem
+        total_demand = sum(self.instance.demands)
+        # ceil(Total / Capacity)
+        self.min_vehicles = int(np.ceil(total_demand / self.instance.capacity))
+        
+        # Log để kiểm tra
+        print(f"   ℹ️ Calculated Minimum Vehicles (LB): {self.min_vehicles}")
+        # Ví dụ F-n45-k4: Demand cao, Capacity thấp -> min_vehicles sẽ là 4.
         
     def _build_graph(self) -> List[Tuple[int, int]]:
         """
@@ -111,14 +118,15 @@ class ExactMultiShotStrategy:
                 range(self.instance.n), 
                 allowed_edges, 
                 self.instance.dist_matrix,
-                subtour_cuts=cuts
+                subtour_cuts=cuts,
+                min_vehicles=self.min_vehicles  # <--- CẬP NHẬT Ở ĐÂY
             )
             
             filename = f"exact_iter_{iteration}.wcnf"
             wcnf.to_file(filename)
             
             # Gọi Solver (Cần timeout cao vì đây là Exact method)
-            out = call_openwbo(filename, timeout=300) 
+            out = call_openwbo(filename, timeout=TIMEOUT_SOLVER)
             if os.path.exists(filename): os.remove(filename)
             
             vars_true = parse_openwbo_model(out)

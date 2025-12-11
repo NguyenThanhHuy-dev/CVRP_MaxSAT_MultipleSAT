@@ -3,32 +3,25 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 def plot_solution(instance, routes, cost):
-    """
-    Vẽ biểu đồ kết quả và lưu vào file ảnh trong thư mục results/plots.
-    """
+
     plt.figure(figsize=(10, 8))
     
-    # 1. Vẽ Depot
     depot_x, depot_y = (0, 0)
     if instance.coords and len(instance.coords) > 0:
         depot_x, depot_y = instance.coords[instance.depot]
         
     plt.scatter(depot_x, depot_y, c='red', marker='s', s=150, zorder=10, label='Depot')
     
-    # 2. Vẽ Khách hàng
-    # Lưu ý: Nếu dữ liệu là Explicit Matrix (không có tọa độ), coords sẽ là (0,0) hết.
-    # Code vẫn chạy nhưng hình sẽ chồng lên nhau (chấp nhận được với Explicit).
+
     if instance.coords:
         xs = [c[0] for c in instance.coords[1:]]
         ys = [c[1] for c in instance.coords[1:]]
         plt.scatter(xs, ys, c='blue', s=40, zorder=5)
         
-        # Đánh số index
         for i in range(1, instance.n):
             if i < len(instance.coords):
                 plt.text(instance.coords[i][0], instance.coords[i][1], str(i), fontsize=9, ha='center')
 
-    # 3. Vẽ Tuyến đường
     cmap = plt.get_cmap('tab20')
     for idx, r in enumerate(routes):
         route_coords = []
@@ -40,11 +33,9 @@ def plot_solution(instance, routes, cost):
                 
         r_xs, r_ys = zip(*route_coords)
         
-        # Vẽ nét liền
         plt.plot(r_xs, r_ys, marker='.', linestyle='-', linewidth=2, 
                  color=cmap(idx % 20), label=f'Route {idx+1}', alpha=0.7)
         
-        # Vẽ mũi tên hướng đi (ở giữa tuyến)
         mid = len(r) // 2
         if mid < len(r) - 1:
             p1 = coords_at(instance, r[mid])
@@ -59,8 +50,7 @@ def plot_solution(instance, routes, cost):
     plt.grid(True, linestyle='--', alpha=0.5)
     plt.tight_layout()
     
-    # Lưu file (Đường dẫn tương đối từ src/utils/plot.py ra results/plots)
-    # Cấu trúc: CVRP_SAT_LAB/src/utils/ -> ../../results/plots
+
     base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     result_dir = os.path.join(base_dir, 'results', 'plots')
     os.makedirs(result_dir, exist_ok=True)

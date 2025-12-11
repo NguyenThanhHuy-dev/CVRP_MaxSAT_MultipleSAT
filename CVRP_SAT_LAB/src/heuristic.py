@@ -1,11 +1,3 @@
-"""
-Clarke-Wright (parallel) + 2-opt implementation.
-Functions:
- - clarke_wright_savings(D, demands, capacity) -> list of routes
- - two_opt(route, D) -> improved route
- - route_cost(route, D) -> cost
- - total_distance(routes, D) -> total cost
-"""
 from typing import List
 import numpy as np
 from itertools import combinations

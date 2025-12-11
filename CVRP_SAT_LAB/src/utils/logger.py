@@ -3,17 +3,11 @@ import os
 import datetime
 
 def log_benchmark(instance, best_routes, initial_cost, final_cost, time_taken, iterations, pool_size, method_name="HybridLNS"):
-    """
-    Ghi log tổng hợp, lưu chi tiết nghiệm và file log text.
-    """
-    # --- 0. Chuẩn bị đường dẫn thư mục ---
-    # Giả sử file này nằm ở: root/src/utils/logger.py -> lên 3 cấp là root
     base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     
     results_dir = os.path.join(base_dir, "results")
     benchmark_file = os.path.join(results_dir, "benchmark_log.csv")
     
-    # Tạo các thư mục con nếu chưa có
     csv_detail_dir = os.path.join(results_dir, "csv")
     log_txt_dir = os.path.join(results_dir, "log")
     
@@ -21,7 +15,6 @@ def log_benchmark(instance, best_routes, initial_cost, final_cost, time_taken, i
     os.makedirs(csv_detail_dir, exist_ok=True)
     os.makedirs(log_txt_dir, exist_ok=True)
 
-    # --- 1. Tính toán Metrics ---
     imp_percent = 0.0
     if initial_cost > 0:
         imp_percent = ((initial_cost - final_cost) / initial_cost) * 100
@@ -30,14 +23,13 @@ def log_benchmark(instance, best_routes, initial_cost, final_cost, time_taken, i
     if instance.bks > 0:
         gap_percent = ((final_cost - instance.bks) / instance.bks) * 100
     else:
-        gap_percent = -1.0 # Không có BKS
+        gap_percent = -1.0
 
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    # --- 2. In ra màn hình console & Chuẩn bị nội dung log ---
     log_content = []
     log_content.append("=" * 50)
-    log_content.append(f"📊 BENCHMARK METRICS ({instance.name}) - {timestamp}")
+    log_content.append(f"   BENCHMARK METRICS ({instance.name}) - {timestamp}")
     log_content.append(f"   Method:        {method_name}")
     log_content.append(f"   BKS (Optimal): {instance.bks}")
     log_content.append(f"   Initial Cost:  {initial_cost:.2f}")
@@ -48,7 +40,7 @@ def log_benchmark(instance, best_routes, initial_cost, final_cost, time_taken, i
     log_content.append(f"   Iterations:    {iterations}")
     log_content.append(f"   Pool Size:     {pool_size}")
     log_content.append("-" * 50)
-    log_content.append("🛣️ DETAILED ROUTES:")
+    log_content.append("    DETAILED ROUTES:")
     
     for i, route in enumerate(best_routes, 1):
         load = sum(instance.demands[n] for n in route)
@@ -56,10 +48,8 @@ def log_benchmark(instance, best_routes, initial_cost, final_cost, time_taken, i
         log_content.append(route_str)
     log_content.append("=" * 50)
 
-    # In ra màn hình
     print("\n".join(log_content))
 
-    # --- 3. Ghi vào file CSV tổng hợp (results/benchmark_log.csv) ---
     file_exists = os.path.isfile(benchmark_file)
     try:
         with open(benchmark_file, mode='a', newline='', encoding='utf-8') as f:
@@ -72,7 +62,7 @@ def log_benchmark(instance, best_routes, initial_cost, final_cost, time_taken, i
             writer.writerow([
                 timestamp,
                 instance.name, 
-                method_name,           # Đã sửa: dùng biến truyền vào
+                method_name,
                 instance.n - 1, 
                 len(best_routes), 
                 instance.capacity, 
@@ -88,8 +78,6 @@ def log_benchmark(instance, best_routes, initial_cost, final_cost, time_taken, i
     except Exception as e:
         print(f"⚠️ Lỗi ghi benchmark csv: {e}")
 
-    # --- 4. Ghi chi tiết nghiệm vào CSV riêng (results/csv/InstanceName_sol.csv) ---
-    # File này hữu ích để vẽ lại biểu đồ hoặc kiểm tra kỹ từng xe
     detail_csv_path = os.path.join(csv_detail_dir, f"{instance.name}_solution.csv")
     try:
         with open(detail_csv_path, mode='w', newline='', encoding='utf-8') as f:
@@ -104,8 +92,7 @@ def log_benchmark(instance, best_routes, initial_cost, final_cost, time_taken, i
     except Exception as e:
         print(f"⚠️ Lỗi ghi detail csv: {e}")
 
-    # --- 5. Ghi Log Text (results/log/InstanceName.log) ---
-    # File này lưu lại y hệt những gì đã in ra màn hình để xem lại sau
+
     log_txt_path = os.path.join(log_txt_dir, f"{instance.name}.log")
     try:
         with open(log_txt_path, mode='w', encoding='utf-8') as f:

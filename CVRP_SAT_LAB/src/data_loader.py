@@ -1,7 +1,3 @@
-"""
-Simple data loader for CVRPLIB-like instances.
-Supports both EUC_2D (Coordinates) and EXPLICIT (Edge Weights) formats.
-"""
 from dataclasses import dataclass
 from typing import List, Tuple, Optional
 import math
