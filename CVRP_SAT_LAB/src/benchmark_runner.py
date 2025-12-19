@@ -1,85 +1,60 @@
-import argparse
-import numpy as np
-import pandas as pd
-from tqdm import tqdm
-import time
+#!/usr/bin/env bash
+# Script chạy thực nghiệm tự động cho Hybrid LNS
+# Cách dùng: 
+# 1. Cấp quyền: chmod +x scripts/run_experiment.sh
+# 2. Chạy: ./scripts/run_experiment.sh
 
-from data_loader import read_vrplib
-from strategies.hybrid_lns import HybridLNSStrategy
-# from strategies.exact_multishot import ExactMultiShotStrategy # Nếu muốn test cả cái này
+# Đường dẫn đến file main
+MAIN_SCRIPT="src/main.py"
 
-def run_stability_test(instance_path, runs=5):
-    """Chạy thuật toán nhiều lần để đánh giá độ ổn định."""
-    
-    instance = read_vrplib(instance_path)
-    print(f"🔬 STARTING STABILITY TEST: {instance.name} (Runs: {runs})")
-    print(f"   BKS: {instance.bks}")
-    
-    costs = []
-    times = []
-    gaps = []
-    
-    for i in range(runs):
-        print(f"\n--- Run {i+1}/{runs} ---")
-        start_time = time.time()
-        
-        solver = HybridLNSStrategy(instance)
-        
-        cost, _ = solver.solve() 
-        
-        elapsed = time.time() - start_time
-        
-        gap = 0.0
-        if instance.bks > 0:
-            gap = ((cost - instance.bks) / instance.bks) * 100
-            
-        costs.append(cost)
-        times.append(elapsed)
-        gaps.append(gap)
-        
-    avg_cost = np.mean(costs)
-    best_cost = np.min(costs)
-    std_cost = np.std(costs)
-    avg_gap = np.mean(gaps)
-    best_gap = np.min(gaps)
-    avg_time = np.mean(times)
-    
-    print("\n" + "="*50)
-    print(f"📊 SUMMARY REPORT FOR {instance.name}")
-    print(f"   Runs: {runs}")
-    print(f"   Best Cost: {best_cost:.2f} (Gap: {best_gap:.2f}%)")
-    print(f"   Avg Cost:  {avg_cost:.2f} (Gap: {avg_gap:.2f}%)")
-    print(f"   Std Dev:   {std_cost:.2f}")
-    print(f"   Avg Time:  {avg_time:.2f}s")
-    print("="*50)
-    
-    summary = {
-        "Instance": instance.name,
-        "Runs": runs,
-        "BKS": instance.bks,
-        "Best_Cost": best_cost,
-        "Avg_Cost": avg_cost,
-        "Best_Gap": best_gap,
-        "Avg_Gap": avg_gap,
-        "Std_Dev": std_cost,
-        "Avg_Time": avg_time
-    }
-    
-    return summary
+# Danh sách 13 bộ dữ liệu cần chạy (Đảm bảo bạn đã tải file .vrp về thư mục data/)
+FILES=(
+    # --- Nhóm Đã có ---
+    "data/A-n32-k5.vrp"
+    "data/E-n31-k7.vrp"
+    "data/F-n45-k4.vrp"
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="CVRP Stability Benchmark Runner")
-    parser.add_argument("instances", nargs='+', help="Path to .vrp files")
-    parser.add_argument("--runs", type=int, default=5, help="Number of runs per instance")
+    # --- Nhóm Nhỏ (Chạy nhanh) ---
+    "data/P-n19-k2.vrp"
+    "data/P-n22-k2.vrp"
+    "data/A-n33-k5.vrp"
+    "data/A-n37-k6.vrp"
+
+    # --- Nhóm Trung bình (Test hiệu năng LNS) ---
+    "data/B-n39-k5.vrp"
+    "data/E-n51-k5.vrp"
+    "data/B-n45-k5.vrp"
+    "data/P-n55-k7.vrp"
     
-    args = parser.parse_args()
-    
-    results = []
-    for path in args.instances:
-        res = run_stability_test(path, runs=args.runs)
-        results.append(res)
+    # --- Nhóm Lớn (Optional - Nếu máy khỏe) ---
+    "data/A-n60-k9.vrp"
+)
+
+echo "🚀 Bắt đầu chạy thực nghiệm hàng loạt (Hybrid LNS)..."
+echo "----------------------------------------------------"
+
+for FILE in "${FILES[@]}"; do
+    if [ -f "$FILE" ]; then
+        echo "▶️  Đang chạy: $FILE"
         
-    df = pd.DataFrame(results)
-    df.to_csv("../results/stability_report.csv", index=False)
-    print("\n   Saved stability report to results/stability_report.csv")
-    print(df)
+        # Gọi python với method là 'lns'
+        # Dùng 'timeout' của Linux để tự động ngắt nếu treo quá 10 phút (600s)
+        # Để tránh việc 1 bài bị lỗi làm treo cả máy qua đêm.
+        timeout 600s python3 "$MAIN_SCRIPT" "$FILE" --method lns
+        
+        EXIT_STATUS=$?
+        if [ $EXIT_STATUS -eq 124 ]; then
+            echo "⚠️  TIMEOUT: Bài toán $FILE chạy quá 600s và bị ngắt."
+        fi
+        
+        echo "✅ Xong $FILE"
+        echo "------------------------------------------------"
+        
+        # Nghỉ 2 giây để máy tản nhiệt tí
+        sleep 2
+    else
+        echo "❌ Lỗi: Không tìm thấy file $FILE (Bạn đã tải về chưa?)"
+    fi
+done
+
+echo "🎉 Đã hoàn tất toàn bộ danh sách thực nghiệm!"
