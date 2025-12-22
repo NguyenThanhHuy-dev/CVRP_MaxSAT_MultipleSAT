@@ -19,12 +19,13 @@ class Instance:
 
 
 def euclidean_distance(a, b):
-    return math.hypot(a[0] - b[0], a[1] - b[1])
+    # CVRPLIB Convention: Euclidean distance rounded to nearest integer
+    return int(round(math.hypot(a[0] - b[0], a[1] - b[1])))
 
 
 def compute_distance_matrix(coords):
     n = len(coords)
-    D = np.zeros((n, n), dtype=float)
+    D = np.zeros((n, n), dtype=int)    # <--- Sửa thành int
     for i in range(n):
         for j in range(n):
             D[i, j] = euclidean_distance(coords[i], coords[j])
@@ -156,7 +157,8 @@ def read_vrplib(path: str) -> Instance:
                 parts = line.split()
                 for p in parts:
                     try:
-                        edge_weights.append(float(p))
+                        # Thử ép về int nếu có thể, hoặc làm tròn
+                        edge_weights.append(int(float(p) + 0.5)) 
                     except: pass
 
     # --- POST-PROCESSING ---
@@ -198,7 +200,7 @@ def read_vrplib(path: str) -> Instance:
         # Tạo tọa độ giả để không bị lỗi code (Plot sẽ bị sai nhưng solver chạy đúng)
         final_coords = [(0.0, 0.0) for _ in range(dimension)]
         
-        D = np.zeros((dimension, dimension), dtype=float)
+        D = np.zeros((dimension, dimension), dtype=int)
         
         if edge_weight_format == "LOWER_ROW":
             # Parse Lower Triangular Matrix

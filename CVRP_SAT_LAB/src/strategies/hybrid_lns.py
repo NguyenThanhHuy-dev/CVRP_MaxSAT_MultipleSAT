@@ -16,21 +16,36 @@ from config import TIMEOUT_LNS_INNER, MAX_ITERATIONS
 class HybridLNSStrategy:
     def __init__(self, instance: Instance):
         self.instance = instance
-        self.k_nearest = 10  # Tăng K lên một chút để không gian tìm kiếm rộng hơn
-        self.max_inner_iter = 3
-        self.stagnation_limit = 20 # Dừng nếu 15 lần liên tiếp không cải thiện
+        
+        # [DYNAMIC CONFIG] Tự động điều chỉnh tham số dựa trên kích thước bài toán
+        # Với bài toán nhỏ (như E-n31), ta cần không gian tìm kiếm dày đặc hơn
+        if instance.n < 45:
+            self.k_nearest = 20
+            self.max_inner_iter = 5  # Thử nhiều lần hơn vì solver chạy nhanh
+        else:
+            self.k_nearest = 10
+            self.max_inner_iter = 3
+
+        self.stagnation_limit = 20 
+        
+        # [GLS CONFIG] Guided Local Search
+        self.penalties = {} 
+        self.lambda_factor = 0.1 
 
     def _build_restricted_graph(self, current_routes: List[List[int]]) -> List[Tuple[int, int]]:
         edges = set()
         N = self.instance.n
         D = self.instance.dist_matrix
         
+        # 1. Giữ lại cạnh từ nghiệm hiện tại (Inheritance)
         keep_probability = 0.6 
         for r in current_routes:
             for i in range(len(r) - 1):
                 if random.random() < keep_probability:
                     edges.add((r[i], r[i+1]))
         
+        # 2. Thêm K láng giềng gần nhất (Spatial Locality)
+        # K sẽ thay đổi tùy theo kích thước bài toán (đã set trong __init__)
         for i in range(N):
             nearest_indices = np.argsort(D[i])[1:self.k_nearest+1]
             for neighbor in nearest_indices:
@@ -38,6 +53,7 @@ class HybridLNSStrategy:
                     edges.add((i, neighbor))
                     edges.add((neighbor, i)) 
         
+        # 3. Đảm bảo kết nối với Depot
         depot_nearest = np.argsort(D[0])[1:self.k_nearest+1]
         for i in depot_nearest:
             edges.add((0, i))
@@ -45,7 +61,7 @@ class HybridLNSStrategy:
             
         for r in current_routes:
             if len(r) > 2:
-                first, last = r[1], r[-2] # r[0] và r[-1] là 0
+                first, last = r[1], r[-2]
                 edges.add((0, first))
                 edges.add((first, 0))
                 edges.add((0, last))
@@ -77,7 +93,7 @@ class HybridLNSStrategy:
             
             is_closed = False
             steps = 0
-            while steps < self.instance.n * 2: # Phòng ngừa lặp vô hạn
+            while steps < self.instance.n * 2: 
                 steps += 1
                 path.append(curr)
                 if curr == 0: 
@@ -121,29 +137,71 @@ class HybridLNSStrategy:
 
         return valid_routes, subtours
 
-    def _greedy_split(self, route: List[int]) -> List[List[int]]:
-        split_routes = []
+    # [NEW] THAY THẾ HOÀN TOÀN _greedy_split BẰNG _split_optimal
+    def _split_optimal(self, route: List[int]) -> List[List[int]]:
+        """
+        Optimal Split Algorithm (Prins 2004)
+        Sử dụng Quy hoạch động (Dynamic Programming) trên đồ thị DAG để tìm cách chia tách
+        lộ trình thành các chuyến xe con sao cho tổng chi phí là nhỏ nhất và thỏa mãn tải trọng.
+        """
+        # 1. Trích xuất danh sách khách hàng (bỏ depot đầu/cuối)
+        route_cust = [x for x in route if x != 0]
+        if not route_cust:
+            return []
+
+        n = len(route_cust)
         capacity = self.instance.capacity
-        current_segment = [0]
-        current_load = 0
+        dist = self.instance.dist_matrix
+        demands = self.instance.demands
         
-        customers = route[1:-1]
-        for cust in customers:
-            d = self.instance.demands[cust]
-            if current_load + d <= capacity:
-                current_segment.append(cust)
-                current_load += d
-            else:
-                current_segment.append(0)
-                split_routes.append(current_segment)
-                current_segment = [0, cust]
-                current_load = d
+        # V[i] là chi phí thấp nhất để phục vụ i khách hàng đầu tiên trong danh sách
+        # Khởi tạo V[0] = 0, còn lại là vô cùng
+        V = [float('inf')] * (n + 1)
+        V[0] = 0
         
-        current_segment.append(0)
-        if len(current_segment) > 2:
-            split_routes.append(current_segment)
+        # P[i] lưu điểm "ngắt" trước đó để truy vết (Predecessor)
+        P = [0] * (n + 1)
         
-        return split_routes
+        # 2. Quy hoạch động
+        for i in range(n): # i là điểm bắt đầu chuyến xe mới (index trong route_cust là i)
+            load = 0
+            cost = 0
+            
+            # j là điểm kết thúc chuyến xe
+            for j in range(i, n):
+                cust_j = route_cust[j]
+                load += demands[cust_j]
+                
+                if load > capacity:
+                    break # Nếu quá tải thì dừng mở rộng chuyến này
+                
+                # Tính chi phí phát sinh cho chuyến xe từ i đến j
+                if i == j:
+                    # Chuyến chỉ có 1 khách: 0 -> cust -> 0
+                    cost = dist[0][cust_j] + dist[cust_j][0]
+                else:
+                    # Chuyến xe kéo dài từ khách hàng trước đó (prev) đến khách hàng hiện tại (curr)
+                    # Cost mới = Cost cũ - cạnh về kho cũ + cạnh nối + cạnh về kho mới
+                    prev_cust = route_cust[j-1]
+                    cost = cost - dist[prev_cust][0] + dist[prev_cust][cust_j] + dist[cust_j][0]
+                
+                # Cập nhật V[j+1] nếu tìm thấy phương án chia tốt hơn
+                if V[i] + cost < V[j+1]:
+                    V[j+1] = V[i] + cost
+                    P[j+1] = i
+                    
+        # 3. Truy vết để tái tạo các chuyến xe (Routes)
+        split_routes = []
+        curr = n
+        while curr > 0:
+            prev = P[curr]
+            # Route segment từ prev đến curr (trong mảng route_cust)
+            # Thêm 0 ở đầu và cuối để thành route hoàn chỉnh
+            segment = [0] + route_cust[prev:curr] + [0]
+            split_routes.append(segment)
+            curr = prev
+            
+        return split_routes[::-1] # Đảo ngược lại vì ta truy vết từ cuối về đầu
 
     def _repair_unvisited_nodes(self, valid_routes: List[List[int]], unvisited_nodes: List[int]) -> List[List[int]]:
         if not unvisited_nodes:
@@ -172,8 +230,35 @@ class HybridLNSStrategy:
                 routes.append([0, node, 0])
         return routes
 
+    def _update_penalties(self, solution_routes: List[List[int]]):
+        edges_to_consider = []
+        for r in solution_routes:
+            for i in range(len(r) - 1):
+                u, v = r[i], r[i+1]
+                if u > v: u, v = v, u 
+                edges_to_consider.append((u, v))
+        
+        if not edges_to_consider: return
+
+        max_utility = -1
+        candidates = []
+        
+        for u, v in edges_to_consider:
+            dist = self.instance.dist_matrix[u][v]
+            penalty = self.penalties.get((u, v), 0)
+            utility = dist / (1 + penalty)
+            
+            if utility > max_utility:
+                max_utility = utility
+                candidates = [(u, v)]
+            elif abs(utility - max_utility) < 1e-6:
+                candidates.append((u, v))
+        
+        for u, v in candidates:
+            self.penalties[(u, v)] = self.penalties.get((u, v), 0) + 1
+
     def solve(self):
-        print(f"🚀 [HybridLNS] Running Robust LNS for {self.instance.name}...")
+        print(f"🚀 [HybridLNS + GLS + OptimalSplit] Running for {self.instance.name}...")
         start_time = time.time()
         
         initial_routes = clarke_wright_savings(self.instance.dist_matrix, self.instance.demands, self.instance.capacity)
@@ -184,24 +269,30 @@ class HybridLNSStrategy:
         print(f"   [Init] Initial Cost: {best_cost:.2f}")
 
         stagnation_counter = 0
+        avg_dist = np.mean(self.instance.dist_matrix)
 
-        # 2. MAIN LOOP
         for it in range(1, MAX_ITERATIONS + 1):
-            # Tạo graph có yếu tố ngẫu nhiên
+            
+            # GLS Weight Update
+            augmented_dist_matrix = np.copy(self.instance.dist_matrix)
+            if self.penalties:
+                for (u, v), count in self.penalties.items():
+                    penalty_value = int(self.lambda_factor * avg_dist * count)
+                    augmented_dist_matrix[u][v] += penalty_value
+                    augmented_dist_matrix[v][u] += penalty_value
+
             allowed_edges = self._build_restricted_graph(best_routes)
             current_subtour_cuts = [] 
             candidate_routes = []
             
-            # Inner Loop (SAT Solver)
             for inner_it in range(self.max_inner_iter):
                 wcnf, edge_map = encode_edges_as_wcnf(
                     range(self.instance.n), 
                     allowed_edges, 
-                    self.instance.dist_matrix,
+                    augmented_dist_matrix, 
                     subtour_cuts=current_subtour_cuts
                 )
                 
-                # Tên file unique để tránh lỗi I/O
                 wcnf_file = f"lns_{self.instance.name}_iter{it}_{inner_it}.wcnf"
                 wcnf.to_file(wcnf_file)
                 
@@ -211,7 +302,6 @@ class HybridLNSStrategy:
                 vars_true = parse_openwbo_model(out)
                 
                 if not vars_true:
-                    # Nếu Solver fail (UNSAT/Timeout), thử thêm random edges ở vòng sau
                     break 
 
                 chosen_edges = []
@@ -252,11 +342,17 @@ class HybridLNSStrategy:
                 feasible_routes = []
                 for r in candidate_routes:
                     load = sum(self.instance.demands[n] for n in r)
+                    # LUÔN LUÔN DÙNG OPTIMAL SPLIT (Thay vì chỉ dùng khi quá tải)
+                    # Lý do: Optimal Split có thể tối ưu lại cả những route "tưởng là ngon"
+                    # nhưng thực ra cắt chưa khéo.
                     if load > self.instance.capacity:
-                        splits = self._greedy_split(r)
-                        feasible_routes.extend(splits)
+                         splits = self._split_optimal(r) # Sử dụng hàm mới
+                         feasible_routes.extend(splits)
                     else:
-                        feasible_routes.append(r)
+                         # Bạn cũng có thể thử chạy split_optimal ngay cả khi load <= capacity
+                         # để xem nó có tìm được cách sắp xếp tốt hơn không.
+                         # Nhưng để an toàn và nhanh, ta chỉ chạy khi quá tải.
+                         feasible_routes.append(r)
                 
                 optimized_routes = [two_opt(r, self.instance.dist_matrix) for r in feasible_routes]
                 current_cost = total_distance(optimized_routes, self.instance.dist_matrix)
@@ -265,24 +361,26 @@ class HybridLNSStrategy:
                     print(f"   ✅ ITER {it}: {best_cost:.2f} -> {current_cost:.2f}")
                     best_cost = current_cost
                     best_routes = optimized_routes
-                    stagnation_counter = 0
+                    stagnation_counter = 0 
                 else:
-                    # LOGGING: In ra ngay cả khi không cải thiện để biết chương trình đang chạy
-                    print(f"   .  ITER {it}: {current_cost:.2f} (No improvement)")
                     stagnation_counter += 1
+                    print(f"   .  ITER {it}: {current_cost:.2f} (No improv) - Stag: {stagnation_counter}")
+                    
+                    if stagnation_counter % 5 == 0:
+                        print(f"      🔥 [GLS] Local Optima detected. Updating penalties...")
+                        self._update_penalties(best_routes)
+
             else:
                 print(f"   ⚠️ ITER {it}: Solver failed to find feasible routes.")
                 stagnation_counter += 1
 
-            # Kiểm tra điều kiện dừng sớm
             if stagnation_counter >= self.stagnation_limit:
-                print(f"   🛑 Stopping early due to stagnation ({self.stagnation_limit} iters without improvement).")
+                print(f"   🛑 Stopping early due to stagnation ({self.stagnation_limit} iters).")
                 break
 
-        # 3. FINISH
         total_time = time.time() - start_time
         print("\n" + "="*50)
-        print(f"🏆 FINAL RESULT")
+        print(f"🏆 FINAL RESULT (Enhanced)")
         print(f"   Cost: {best_cost:.2f}")
         
         log_benchmark(self.instance, best_routes, 
